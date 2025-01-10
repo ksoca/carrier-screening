@@ -1,0 +1,820 @@
+---
+title: "CS trial code including ancestry"
+author: "Kayla M. Socarras"
+date: "2024-01-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#this is to load the packages needed for the code in this document
+pacman::p_load(knitr, tibble, stringr, dplyr, tidyr, readr, data.table)
+
+#in case any of the files need to be exported as a table
+library(writexl)
+```
+
+```{r load CFTR data, echo=FALSE}
+#ClinVar
+#this is the ClinVar table given to me by Larry. It only has 1Star variants and above
+cftr_clinvar <- fread("../data/cs_cftr.csv")
+
+#gnomad v4.0.0
+#this is the gnomadv4 cftr table that will give me general af
+#downloaded December 2023
+cftr_af <- fread("../data/gnomAD_v4.0.0_CFTR_2023.csv")
+```
+
+```{r selecting the necessary information and testing, echo=FALSE}
+#The gnomad v4 table did not provide AF for each demographic. I will have to calculate them. I did check with Pam if I had the right eq. I will cross check eq with what is on GnomAD v4.0.0.
+#Note figure out loops
+cftr_af_prep <- cftr_af %>%
+  select(`ClinVar Variation ID`, `Allele Count`, `Allele Number`, `Allele Frequency`, `Allele Count African/African American`,`Allele Number African/African American`,  `Allele Count Ashkenazi Jewish`, `Allele Number Ashkenazi Jewish`, `Allele Count European (Finnish)`, `Allele Number European (Finnish)`, `Allele Count European (non-Finnish)`, `Allele Number European (non-Finnish)`, `Allele Count Middle Eastern`, `Allele Number Middle Eastern`, `Allele Count East Asian`, `Allele Number East Asian`, `Allele Count South Asian`, `Allele Number South Asian`) %>%
+  rename('clinvar_variation_id' = 'ClinVar Variation ID') %>% 
+  mutate(AF_test = (cftr_af$`Allele Count`/ cftr_af$`Allele Number` ))%>%
+  mutate(AA_AF = (cftr_af$`Allele Count African/African American`/ cftr_af$`Allele Number African/African American` ))%>%
+  mutate(AJ_AF = (cftr_af$`Allele Count Ashkenazi Jewish`/ cftr_af$`Allele Number Ashkenazi Jewish` ))%>%
+  mutate(EF_AF = (cftr_af$`Allele Count European (Finnish)`/ cftr_af$`Allele Number European (Finnish)` ))%>%
+  mutate(ENF_AF = (cftr_af$`Allele Count European (non-Finnish)`/ cftr_af$`Allele Number European (non-Finnish)` ))%>%
+  mutate(ME_AF = (cftr_af$`Allele Count Middle Eastern`/ cftr_af$`Allele Number Middle Eastern` ))%>%
+  mutate(SA_AF = (cftr_af$`Allele Count East Asian`/ cftr_af$`Allele Number East Asian` ))%>%
+  mutate(EA_AF = (cftr_af$`Allele Count South Asian`/ cftr_af$`Allele Number South Asian` ))%>%
+  select(clinvar_variation_id, `Allele Frequency`, AF_test:EA_AF)
+
+cftr_af_full <- left_join(cftr_clinvar, cftr_af_prep, by=c("variation_id"="clinvar_variation_id")) #this should make it have only cftr ClinVar alleles with their corresponding frequency
+```
+
+```{r originalCFTR data prep, echo=FALSE}
+#par it down to what is needed for HW equation
+
+#pathogenic variants
+cftr_af_pathogenic_variants <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, `Allele Frequency`) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(!is.na(`Allele Frequency`)) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_p <- cftr_af_pathogenic_variants%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic variants
+cftr_af_likely_pathogenic_variants <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, `Allele Frequency`) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(!is.na(`Allele Frequency`)) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_lp <- cftr_af_likely_pathogenic_variants%>%
+  colSums()#get value of all p in ClinVar
+
+#variants of uncertain significance
+cftr_af_variant_uncertain_significance <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, `Allele Frequency`) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(!is.na(`Allele Frequency`)) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_vus <- cftr_af_variant_uncertain_significance%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR GnomadV4 Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af)
+cftr_af_p_lp <- cftr_af_p + cftr_af_lp 
+#This results in 0.0186
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af)
+cftr_af_vus 
+# This results in 0.0178
+
+cftr_carrier_rate_plp <- 2*cftr_af_p_lp #basically 2*P_LP_af*(1-P_LP_af)
+#This results in 0.0372
+
+cftr_positive_couples <- cftr_carrier_rate_plp * cftr_carrier_rate_plp #both individuals in the couple being carriers
+#This results in 0.0744 (original error in code instead of squared it times by two)
+#This results in 0.00138
+
+cftr_carrier_rate_plpv <- 2*(cftr_af_p_lp + cftr_af_vus) #it is this2*(P_LP_af+VUS_af)*(1-(P_LP_af+VUS_af))
+#This results in 0.0728
+
+cftr_final <- cftr_carrier_rate_plp * cftr_carrier_rate_plpv #this results in 0.00271
+```
+
+```{r test CFTR freq, echo=FALSE}
+#this was done due to a lack of AF being included in the overall gene variant table for all demographics
+#after running each of these equations the original gnomAD v4.0.0. AF and the gnomad raw data calculated AF were near identical. The ONLY variation was found after the 5th decimal place.
+
+#pathogenic variants
+cftr_af_pathogenic_variants_test <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AF_test) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(AF_test))) & AF_test > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_p_test <- cftr_af_pathogenic_variants_test%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic variants 
+cftr_af_likely_pathogenic_variants_test <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AF_test) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(AF_test))) & AF_test > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_lp_test <- cftr_af_likely_pathogenic_variants_test%>%
+  colSums()#get value of all p in ClinVar
+
+#variants of uncertain significance
+cftr_af_variant_uncertain_significance_test <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AF_test) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(AF_test))) & AF_test > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_vus_test <- cftr_af_variant_uncertain_significance_test%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR TEST Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af_test)
+cftr_af_p_lp_test <- cftr_af_p_test + cftr_af_lp_test 
+#This results in 0.0186
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af)
+cftr_af_vus_test 
+# This results in 0.178
+
+cftr_carrier_rate_plp_test <- 2*cftr_af_p_lp_test #basically 2*P_LP_af_test*(1-P_LP_af_test)
+#This results in 0.0.0728
+
+cftr_positive_couples_test <- cftr_carrier_rate_plp_test * cftr_carrier_rate_plp_test #both individuals in the couple being carriers
+#This results in 0.0372
+
+cftr_carrier_rate_plpv_test <- 2*(cftr_af_p_lp_test + cftr_af_vus_test) #it is this2*(P_LP_af+VUS_af_test)*(1-(P_LP_af+VUS_af_test))
+#This results in 0.0728
+
+cftr_final_test <- cftr_carrier_rate_plp_test * cftr_carrier_rate_plpv_test #this results in 0.0027
+```
+
+```{r CFTR test CTFR AF data to save into Excel, echo=FALSE}
+#test of calculations
+#p, lp, and vus calculations
+cftr_af_p_test_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AF_test) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(AF_test))) & AF_test > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_lp_test_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AF_test) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(AF_test))) & AF_test > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_vus_test_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AF_test) %>% #the basics
+  filter(vcv_classification == "Uncertain_signifcance") %>%  
+  filter(((!is.na(AF_test))) & AF_test > 0) %>%
+  select(-c(variation_name, vcv_classification))
+  
+#create a list to save the objects
+cftr_af_test_sheet <- list("cftr_lp_af_test_2" = cftr_af_lp_test_2, "cftr_p_af_test_2" = cftr_af_p_test_2, "cftr_vus_af_test_2" = cftr_af_vus_test_2) #sheets must be in data frames in order for this to work
+
+#create the sheet
+#write_xlsx(cftr_af_test_sheet, "../Desktop/cftr_clinvar_af_test_information_0112024.xlsx")
+```
+
+```{r African/ African American CFTR data prep, echo=FALSE}
+#pathogenic variants
+cftr_af_pathogenic_variants_aa <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AA_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(AA_AF))) & AA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_p_aa <- cftr_af_pathogenic_variants_aa%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic variants
+cftr_af_likely_pathogenic_variants_aa <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AA_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(AA_AF))) & AA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_lp_aa <- cftr_af_likely_pathogenic_variants_aa%>%
+  colSums()#get value of all p in ClinVar
+
+#variants of uncertain significance
+cftr_af_variant_uncertain_significance_aa <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AA_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(AA_AF))) & AA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_vus_aa <- cftr_af_variant_uncertain_significance_aa%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR African American Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af_aa)
+cftr_af_p_lp_aa <- cftr_af_p_aa + cftr_af_lp_aa 
+#This results in 0.00742
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af_aa)
+cftr_af_vus_aa
+# This results in 0.0325
+
+cftr_carrier_rate_plp_aa <- 2*cftr_af_p_lp_aa #basically 2*P_LP_af_aa*(1-P_LP_af_aa)
+#This results in 0.0148
+
+cftr_positive_couples_aa <- cftr_carrier_rate_plp_aa * cftr_carrier_rate_plp_aa #both individuals in the couple being carriers
+#This results in 0.00022
+
+cftr_carrier_rate_plpv_aa <- 2*(cftr_af_p_lp_aa + cftr_af_vus_aa) #it is this2*(P_LP_af+VUS_af_aa)*(1-(P_LP_af+VUS_af_aa))
+#This results in 0.0798
+
+cftr_final_aa <- cftr_carrier_rate_plp_aa * cftr_carrier_rate_plpv_aa #this results in 0.00118
+```
+
+```{r African American AF data to save in Excel, echo=FALSE}
+#aa
+#p, lp, and vus calculations
+cftr_af_p_aa_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AA_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(AA_AF))) & AA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification)) #strip it down to only necessary
+
+cftr_af_lp_aa_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AA_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(AA_AF))) & AA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification)) #strip it down to only necessary
+
+cftr_af_vus_aa_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AA_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(AA_AF))) & AA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification)) #strip it down to only necessary
+
+#create a list to save the objects
+cftr_af_aa_sheet <- list("cftr_af_p_aa_2" = cftr_af_p_aa_2, "cftr_af_lp_aa_2" = cftr_af_lp_aa_2, "cftr_af_vus_aa_2" = cftr_af_vus_aa_2) #sheets must be in data frames in order for this to work
+
+#create the sheet
+#write_xlsx(cftr_af_aa_sheet, "../Desktop/cftr_clinvar_aa_af_information_01112024.xlsx")
+```
+
+```{r Ashkenzi Jewish CFTR data prep, echo=FALSE}
+#pathogenic variants
+cftr_af_pathogenic_variants_aj <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AJ_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(AJ_AF))) & AJ_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_p_aj <- cftr_af_pathogenic_variants_aj%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic
+cftr_af_likely_pathogenic_variants_aj <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AJ_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(AJ_AF))) & AJ_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_lp_aj <- cftr_af_likely_pathogenic_variants_aj%>%
+  colSums()#get value of all p in ClinVar
+
+#variants of uncertian significance
+cftr_af_variant_uncertain_significance_aj <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AJ_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(AJ_AF))) & AJ_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_vus_aj <- cftr_af_variant_uncertain_significance_aj%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR AshkenaziJewish Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af_aj)
+cftr_af_p_lp_aj <- cftr_af_p_aj + cftr_af_lp_aj 
+#This results in 0.018
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af_aj)
+cftr_af_vus_aj
+# This results in 0.056
+
+cftr_carrier_rate_plp_aj <- 2*cftr_af_p_lp_aj #basically 2*P_LP_af_aj*(1-P_LP_af_aj)
+#This results in 0.036
+
+cftr_positive_couples_aj <- cftr_carrier_rate_plp_aj * cftr_carrier_rate_plp_aj #both individuals in the couple being carriers
+#This results in 0.0013
+
+cftr_carrier_rate_plpv_aj <- 2*(cftr_af_p_lp_aj + cftr_af_vus_aj) #it is this2*(P_LP_af+VUS_af_aj)*(1-(P_LP_af+VUS_af_aj))
+#This results in 0.148
+
+cftr_final_aj <- cftr_carrier_rate_plp_aj * cftr_carrier_rate_plpv_aj #this results in 0.00533
+```
+
+```{r Ashkenazi Jewish CFTR AF data to save in Excel, echo=FALSE}
+#aj
+#p, lp, and vus calculations
+cftr_af_p_aj_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AJ_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(AJ_AF))) & AJ_AF > 0) %>%
+  select(-c(variation_name, vcv_classification)) 
+
+cftr_af_lp_aj_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AJ_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(AJ_AF))) & AJ_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_vus_aj_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, AJ_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(AJ_AF))) & AJ_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+ 
+#create a list to save the objects
+cftr_af_aj_sheet <- list("cftr_af_p_aj_2" = cftr_af_p_aj_2, "cftr_af_lp_aj_2" = cftr_af_lp_aj_2, "cftr_af_vus_aj_2" = cftr_af_vus_aj_2) #sheets must be in data frames in order for this to work
+
+#create the sheet
+#write_xlsx(cftr_af_aj_sheet, "../Desktop/cftr_clinvar_aj_af_information_0112024.xlsx")
+```
+
+```{r European (Finnish) CFTR data prep, echo=FALSE}
+#pathogenic variants
+cftr_af_pathogenic_variants_ef <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EF_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(EF_AF))) & EF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_p_ef <- cftr_af_pathogenic_variants_ef%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic variants
+cftr_af_likely_pathogenic_variants_ef <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EF_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(EF_AF))) & EF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_lp_ef <- cftr_af_likely_pathogenic_variants_ef%>%
+  colSums()#get value of all p in ClinVar
+
+#variants of uncertain significance
+cftr_af_variant_uncertain_significance_ef <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EF_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(EF_AF))) & EF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id") #set up rowname
+
+cftr_af_vus_ef <- cftr_af_variant_uncertain_significance_ef%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR European (Finnish) Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af_ef)
+cftr_af_p_lp_ef <- cftr_af_p_ef + cftr_af_lp_ef 
+#This results in 0.0065
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af_ef)
+cftr_af_vus_ef
+# This results in 0.00398
+
+cftr_carrier_rate_plp_ef <- 2*cftr_af_p_lp_ef #basically 2*P_LP_af_ef*(1-P_LP_af_ef)
+#This results in 0.0065
+
+cftr_positive_couples_ef <- cftr_carrier_rate_plp_ef * cftr_carrier_rate_plp_ef #both individuals in the couple being carriers
+#This results in 0.000169
+
+cftr_carrier_rate_plpv_ef <- 2*(cftr_af_p_lp_ef + cftr_af_vus_ef) #it is this2*(P_LP_af+VUS_af_ef)*(1-(P_LP_af+VUS_af_ef))
+#This results in 0.021
+
+cftr_final_ef <- cftr_carrier_rate_plp_ef * cftr_carrier_rate_plpv_ef #this results in 0.000273
+```
+
+```{r European (Finnish) CFTR AF data for Excel, echo=FALSE}
+#ef
+#p, lp, and vus calculations
+cftr_af_p_ef_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EF_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(EF_AF))) & EF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_lp_ef_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EF_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(EF_AF))) & EF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_vus_ef_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EF_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(EF_AF))) & EF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification)) #strip it down to only necessary
+
+#create a list to save the objects
+cftr_af_ef_sheet <- list("cftr_af_lp_ef_2" = cftr_af_lp_ef_2, "cftr_p_af_ef_2" = cftr_af_p_ef_2, "cftr_vus_af_ef_2" = cftr_af_vus_ef_2) #sheets must be in data frames in order for this to work
+
+#create the sheet
+#write_xlsx(cftr_af_ef_sheet, "../Desktop/cftr_clinvar_ef_af_information_2024.xlsx")
+```
+
+```{r European (non-Finnish) CFTR data prep, echo=FALSE}
+#pathogenic variants
+cftr_af_pathogenic_variants_enf <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ENF_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(ENF_AF))) & ENF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_p_enf <- cftr_af_pathogenic_variants_enf%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic variants
+cftr_af_likely_pathogenic_variants_enf <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ENF_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(ENF_AF))) & ENF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_lp_enf <- cftr_af_likely_pathogenic_variants_enf%>%
+  colSums()#get value of all p in ClinVar
+
+#variants of uncertain significance
+cftr_af_variant_uncertain_significance_enf <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ENF_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(ENF_AF))) & ENF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_vus_enf <- cftr_af_variant_uncertain_significance_enf%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR European (Non-Finnish) Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af_enf)
+cftr_af_p_lp_enf <- cftr_af_p_enf + cftr_af_lp_enf 
+#This results in 0.0222
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af_enf)
+cftr_af_vus_enf
+# This results in 0.0139
+
+cftr_carrier_rate_plp_enf <- 2*cftr_af_p_lp_enf #basically 2*P_LP_af_enf*(1-P_LP_af_enf)
+#This results in 0.0443
+
+cftr_positive_couples_enf <- cftr_carrier_rate_plp_enf * cftr_carrier_rate_plp_enf #both individuals in the couple being carriers
+#This results in 0.00197
+
+cftr_carrier_rate_plpv_enf <- 2*(cftr_af_p_lp_enf + cftr_af_vus_enf) #it is this2*(P_LP_af+VUS_af_enf)*(1-(P_LP_af+VUS_af_enf))
+#This results in 0.0721
+
+cftr_final_enf <- cftr_carrier_rate_plp_enf * cftr_carrier_rate_plpv_enf #this results in 0.0032
+```
+
+```{r European (non-Finnish) CFTR AF data for Excel, echo=FALSE}
+#enf
+#p, lp, and vus calculations
+cftr_af_p_enf_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ENF_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(ENF_AF))) & ENF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_lp_enf_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ENF_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(ENF_AF))) & ENF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_vus_enf_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ENF_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(ENF_AF))) & ENF_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+#create a list to save the objects
+cftr_af_enf_sheet <- list("cftr_af_lp_enf_2" = cftr_af_lp_enf_2, "cftr_af_p_enf_2" = cftr_af_p_enf_2, "cftr_af_vus_enf_2" = cftr_af_vus_enf_2) #sheets must be in data frames in order for this to work
+
+#create the sheet
+#write_xlsx(cftr_af_enf_sheet, "../Desktop/cftr_clinvar_enf_af_information_0112024.xlsx")
+```
+
+```{r Middle Eastern CFTR data prep, echo=FALSE}
+#pathogenic variants
+cftr_af_pathogenic_variants_me <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ME_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(ME_AF))) & ME_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_p_me <- cftr_af_pathogenic_variants_me%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic variants
+cftr_af_likely_pathogenic_variants_me <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ME_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(ME_AF))) & ME_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_lp_me <- cftr_af_likely_pathogenic_variants_me%>%
+  colSums()#get value of all p in ClinVar
+
+#variant of uncertain significance
+cftr_af_variant_uncertain_significance_me <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ME_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(ME_AF))) & ME_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_vus_me <- cftr_af_variant_uncertain_significance_me%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR Middle Eastern Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af_me)
+cftr_af_p_lp_me <- cftr_af_p_me + cftr_af_lp_me 
+#This results in 0.0534
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af_me)
+cftr_af_vus_me
+# This results in 0.0222
+
+cftr_carrier_rate_plp_me <- 2*cftr_af_p_lp_me #basically 2*P_LP_af_me*(1-P_LP_af_me)
+#This results in 0.107
+
+cftr_positive_couples_me <- cftr_carrier_rate_plp_me * cftr_carrier_rate_plp_me #both individuals in the couple being carriers
+#This results in 0.000114
+
+cftr_carrier_rate_plpv_me <- 2*(cftr_af_p_lp_me + cftr_af_vus_me) #it is this2*(P_LP_af+VUS_af_me)*(1-(P_LP_af+VUS_af_me))
+#This results in 0.0551
+
+cftr_final_me <- cftr_carrier_rate_plp_me * cftr_carrier_rate_plpv_me #this results in 0.000588
+```
+
+```{r Middle Easter CFTR AF data for Excel, echo=FALSE}
+#me
+#p, lp, and vus calculations
+cftr_af_p_me_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ME_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(ME_AF))) & ME_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_lp_me_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ME_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(ME_AF))) & ME_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_vus_me_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, ME_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(ME_AF))) & ME_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+#create a list to save the objects
+cftr_af_me_sheet <- list("cftr_lp_af_me_2" = cftr_af_lp_me_2, "cftr_p_af_me_2" = cftr_af_p_me_2, "cftr_vus_af_me_2" = cftr_af_vus_me_2) #sheets must be in data frames in order for this to work
+
+#create the sheet
+#write_xlsx(cftr_af_me_sheet, "../Desktop/cftr_clinvar_me_af_information_0112024.xlsx")
+```
+
+```{r South Asian CFTR data prep, echo=FALSE}
+#pathogenic variants
+cftr_af_pathogenic_variants_sa <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, SA_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(SA_AF))) & SA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_p_sa <- cftr_af_pathogenic_variants_sa%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic variants
+cftr_af_likely_pathogenic_variants_sa <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, SA_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(SA_AF))) & SA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_lp_sa <- cftr_af_likely_pathogenic_variants_sa%>%
+  colSums()#get value of all p in ClinVar
+
+#variants of uncertain significance
+cftr_af_variant_uncertain_significance_sa <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, SA_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(SA_AF))) & SA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_vus_sa <- cftr_af_variant_uncertain_significance_sa%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR South Asian Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af_sa)
+cftr_af_p_lp_sa <- cftr_af_p_sa + cftr_af_lp_sa 
+#This results in 0.000858
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af_sa)
+cftr_af_vus_sa
+# This results in 0.0295
+
+cftr_carrier_rate_plp_sa <- 2*cftr_af_p_lp_sa #basically 2*P_LP_af_sa*(1-P_LP_af_sa)
+#This results in 0.00172
+
+cftr_positive_couples_sa <- cftr_carrier_rate_plp_sa * cftr_carrier_rate_plp_sa #both individuals in the couple being carriers
+#This results in 2.94e-06
+
+cftr_carrier_rate_plpv_sa <- 2*(cftr_af_p_lp_sa + cftr_af_vus_sa) #it is this2*(P_LP_af+VUS_af_sa)*(1-(P_LP_af+VUS_af_sa))
+#This results in 0.0608
+
+cftr_final_sa <- cftr_carrier_rate_plp_sa * cftr_carrier_rate_plpv_sa #this results in 0.000104
+```
+
+```{r South Asian CFTR AF data for Excel, echo=FALSE}
+#sa
+#p, lp, and vus calculations
+cftr_af_p_sa_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, SA_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(SA_AF))) & SA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_lp_sa_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, SA_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(SA_AF))) & SA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_vus_sa_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, SA_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(SA_AF))) & SA_AF > 0) %>%
+  select(-c(variation_name, vcv_classification))
+
+#create a list to save the objects
+cftr_af_sa_sheet <- list("cftr_lp_af_sa_2" = cftr_af_lp_sa_2, "cftr_p_af_sa_2" = cftr_af_p_sa_2, "cftr_vus_af_sa_2" = cftr_af_vus_sa_2) #sheets must be in data frames in order for this to work
+
+#create the sheet
+#write_xlsx(cftr_af_sa_sheet, "../Desktop/cftr_clinvar_sa_af_information_0112024.xlsx")
+```
+
+```{r East Asian CFTR data prep, echo=FALSE}
+#pathogenic variants
+cftr_af_pathogenic_variants_ea <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EA_AF) %>% #the basics
+  filter(vcv_classification == "Pathogenic") %>%  
+  filter(((!is.na(EA_AF))) & EA_AF > 0) %>% 
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_p_ea <- cftr_af_pathogenic_variants_ea%>%
+  colSums()#get value of all p in ClinVar
+
+#likely pathogenic variants
+cftr_af_likely_pathogenic_variants_ea <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EA_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(EA_AF))) & EA_AF > 0) %>% 
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_lp_ea <- cftr_af_likely_pathogenic_variants_ea%>%
+  colSums()#get value of all p in ClinVar
+
+#variants of uncertain significance
+cftr_af_variant_uncertain_significance_ea <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EA_AF) %>% #the basics
+  filter(vcv_classification == "Uncertain_significance") %>%  
+  filter(((!is.na(EA_AF))) & EA_AF > 0) %>% 
+  select(-c(variation_name, vcv_classification))%>% #strip it down to only necessary
+  column_to_rownames(var = "variation_id")#set up rowname
+
+cftr_af_vus_ea <- cftr_af_variant_uncertain_significance_ea%>%
+  colSums()#get value of all p in ClinVar
+```
+
+```{r CFTR East Asian Probability Calculations}
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af_ea)
+cftr_af_p_lp_ea <- cftr_af_p_ea + cftr_af_lp_ea 
+#This results in 000726
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af_ea)
+cftr_af_vus_ea
+# This results in 0.0296
+
+cftr_carrier_rate_plp_ea <- 2*cftr_af_p_lp_ea #basically 2*P_LP_af_ea*(1-P_LP_af_ea)
+#This results in 0.0145
+
+cftr_positive_couples_ea <- cftr_carrier_rate_plp_ea * cftr_carrier_rate_plp_ea #both individuals in the couple being carriers
+#This results in 0.00021
+
+cftr_carrier_rate_plpv_ea <- 2*(cftr_af_p_lp_ea + cftr_af_vus_ea) #it is this2*(P_LP_af+VUS_af_ea)*(1-(P_LP_af+VUS_af_ea))
+#This results in 0.0736
+
+cftr_final_ea <- cftr_carrier_rate_plp_ea * cftr_carrier_rate_plpv_ea #this results in 0.00107
+```
+
+```{r East Asian CFTR AF data for excel, echo=FALSE}
+#ea
+#p, lp, and vus calculations
+cftr_af_p_ea_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EA_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(EA_AF))) & EA_AF > 0) %>% 
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_lp_ea_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EA_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(EA_AF))) & EA_AF > 0) %>% 
+  select(-c(variation_name, vcv_classification))
+
+cftr_af_vus_ea_2 <- cftr_af_full %>%
+  select(variation_name, variation_id, vcv_classification, EA_AF) %>% #the basics
+  filter(vcv_classification == "Likely_pathogenic") %>%  
+  filter(((!is.na(EA_AF))) & EA_AF > 0) %>% 
+  select(-c(variation_name, vcv_classification))
+
+#create a list to save the objects
+cftr_af_ea_sheet <- list("cftr_af_lp_ea_2" = cftr_af_lp_ea_2, "cftr_af_p_ea_2" = cftr_af_p_ea_2, "cftr_af_vus_ea_2" = cftr_af_vus_ea_2) #sheets must be in data frames in order for this to work
+
+#create the sheet
+#write_xlsx(cftr_af_ea_sheet, "../Desktop/cftr_clinvar_ea_af_information_2024.xlsx")
+```
+
+```{r HW equation, echo=FALSE}
+#HW:(p^2)+(2*p*q)+(q^2)=1 , p+q=1
+#prob_hom_ALT + prob_COMP_HET + prob_hom_WT
+#notes: 1. P only HW, 2. VUS HW, 3. P+VUS HW, probability of P+VUS carriage = 3-1-2
+
+#testing out the normal HW set up
+p <- 0.2
+q <- 0.8 
+(p^2)+(2*p*q)+(q^2)
+
+#Here are some notes. 
+# p=(af_P+af_LP+af_VUS)
+# q=1-p
+
+#applying this to what we have for p or lp variants
+p <- 0.0081 #p/lp variants
+q <- 0.016 # vus variants
+h <- p+q #p/lp/vus
+
+plp_carrier_rate <- 2*p #lp/p carriers 
+plp_postive_couples <- 2*plp_carrier_rate #p/lp positive couples
+plpv_carrier_rate <- 2*h # p/lp/vus carriers
+final_plpvus <- plp_carrier_rate * plpv_carrier_rate #plp +p/lp/vus couples
+
+
+#lets try the above code with data on CFTR
+#Sum up the allele frequencies of P/LP variants (lets call it P_LP_af)
+cftr_af_p_lp <- cftr_af_p + cftr_af_lp
+q <- 1-p
+
+#Sum up the allele frequencies of VUS variants (lets call it VUS_af)
+h <- cftr_af_vus 
+
+cftr_carrier_rate_plp <- 2*cftr_af_p_lp #(basically 2*P_LP_af*(1-P_LP_af)
+cftr_positive_couples <- 2*cftr_carrier_rate_plp #both individuals in the couple being carriers
+cftr_carrier_rate_plpv <- 2*(cftr_af_p_lp + cftr_af_vus) #2*(P_LP_af+VUS_af)*(1-(P_LP_af+VUS_af))
+
+cftr_final <- cftr_carrier_rate_plp * cftr_carrier_rate_plpv
+```
